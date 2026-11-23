@@ -1,159 +1,137 @@
-# KilatMart · A2 Query Federation (DuckDB)
+# KilatMart · A2 Query Federation
 
-IF4052 Service Computing: hands-on integration exercise, **Track A, option A2: query federation**.
+This is our project for the IF4052 Service Computing integration exercise. We picked Track A, option A2: query federation.
 
-KilatMart's analytics team used to report on *yesterday's* data, built from manual CSV exports.
-This project answers their questions **live, across two databases, without copying any data**:
-web shop orders are in **PostgreSQL**, warehouse stock is in **MySQL**, and a small **Go**
-service with an embedded **DuckDB** engine joins them at query time.
+KilatMart's analytics team has been working from yesterday's data. Someone exports CSV files by hand every night, and the reports are built from those files. We wanted the team to get today's answers without copying anything. Orders live in the web shop's PostgreSQL database and stock lives in the inventory's MySQL database. A small Go service runs DuckDB inside it and reads both databases whenever someone asks a question. Nothing is exported, copied, or stored in between.
 
 ```
- ┌──────────────────────┐          ┌──────────────────────┐
- │ orders-db            │          │ stock-db             │
- │ PostgreSQL 16        │          │ MySQL 8.4            │
- │ orders (web shop)    │          │ stock (inventory)    │
- └──────────┬───────────┘          └───────────┬──────────┘
-            │ postgres extension                │ mysql extension
-            │ (read-only user)                  │ (read-only user)
-            └───────────────┬───────────────────┘
-                 ┌──────────▼───────────┐
-                 │ federation (Go)      │  embedded DuckDB, in memory
-                 │ ATTACH both, READ_ONLY│  nothing is stored or copied
-                 └──────────┬───────────┘
-                            ▼  HTTP: JSON · CSV · HTML
-                     Analytics team
+   orders-db (PostgreSQL)         stock-db (MySQL)
+   web shop orders                warehouse stock
+            \                         /
+             \   read-only logins    /
+              v                     v
+         federation (Go + DuckDB, in memory)
+                      |
+                      v   HTTP: JSON, CSV or HTML
+               Analytics team
 ```
 
-## Quick start
+## Running it
 
-Requirements: Docker with Compose v2. About 1 GB of free RAM. Ports 8080, 15432 and 13306 must be free.
+All you need is Docker with Compose. It uses about 1 GB of memory, and ports 8080, 15432 and 13306 must be free.
 
 ```bash
 docker compose up --build
 ```
 
-When all three services are healthy, open **http://localhost:8080**.
+When all three containers show as healthy, open http://localhost:8080 in a browser. You can also use curl:
 
 ```bash
-curl localhost:8080/reports/at-risk-orders              # JSON
-curl "localhost:8080/reports/at-risk-orders?format=csv" # CSV
-curl localhost:8080/sources                             # is each source reachable?
+curl localhost:8080/reports/at-risk-orders               # JSON
+curl "localhost:8080/reports/at-risk-orders?format=csv"  # CSV
+curl localhost:8080/sources                              # is each database reachable?
 ```
 
-The first build downloads Go modules and the DuckDB extensions. After that, everything runs
-**offline**, because the extensions are baked into the image.
+The first build takes a while because it downloads the Go modules and the DuckDB extensions. They are saved into the image, so after that everything works offline.
 
-## Live demo (must-show items)
+## The demo
 
 ```bash
-scripts/demo.sh      # step by step, press Enter between steps
-scripts/reset.sh     # back to the seed data afterwards
+scripts/demo.sh    # goes through the demo one step at a time; press Enter to continue
+scripts/reset.sh   # puts the original sample data back afterwards
 ```
 
-| Must show (slide 6) | Demo step |
-|---|---|
-| One SQL query joining both databases: paid orders whose item is low on stock | step 2: `GET /reports/at-risk-orders` |
-| Change a source row; the next query sees it | step 3: update stock in MySQL, then an order in PostgreSQL |
-| Stop one source and show the error | steps 4–5: `docker compose stop stock-db` → HTTP 503 naming the failed source; start it again and the next query works |
+The demo covers the three things the brief asks for:
 
-The federated query, from [`federation/queries/at-risk-orders.sql`](federation/queries/at-risk-orders.sql):
+1. **One query across both databases.** It lists paid orders whose product is running low in the warehouse.
+2. **Changes show up right away.** We lower a product's stock in MySQL, then mark an order as paid in PostgreSQL. The next query reflects each change, and there's no sync step.
+3. **What happens when a database goes down.** We stop the MySQL container and ask again. The service replies with HTTP 503 and says it was the stock database that failed. Once MySQL is back, the next query works again.
+
+This is the query, from [`federation/queries/at-risk-orders.sql`](federation/queries/at-risk-orders.sql):
 
 ```sql
 SELECT o.order_id, o.customer_name, o.sku, s.product_name,
        o.quantity AS ordered_qty, s.qty_on_hand, s.reorder_level, s.warehouse, o.ordered_at
 FROM orders_pg.public.orders AS o          -- PostgreSQL
 JOIN stock_my.stock          AS s          -- MySQL
-  ON s.product_code = o.sku                -- different column names in each system
+  ON s.product_code = o.sku                -- the two systems name the product id differently
 WHERE o.status = 'paid' AND s.qty_on_hand < s.reorder_level
 ORDER BY o.ordered_at;
 ```
 
-## Failure experiment
+## Failure experiments
 
-See [`experiments/README.md`](experiments/README.md). `experiments/run.sh source-down | source-slow | schema-change`
-runs an experiment and saves a log. You can run each one in `fresh` and `persistent` engine mode.
+The experiments and their write-up are in [`experiments/`](experiments/README.md). Each experiment has one command:
 
-## API
+```bash
+experiments/run.sh source-down     # stop the stock database
+experiments/run.sh source-slow     # freeze the orders database so it hangs
+experiments/run.sh schema-change   # rename a column the query depends on
+```
+
+Each run saves its output to `experiments/results/`, so we have evidence for the slides.
+
+## Endpoints
 
 | Endpoint | What it does |
 |---|---|
-| `GET /` | Report list (HTML) |
-| `GET /reports` | Report list (JSON) |
-| `GET /reports/{name}` | Runs a report. `?format=json\|csv\|html` (a browser gets HTML) |
-| `GET /sources` | Checks each source on its own: `up` / `down: …` |
-| `POST /sql` | Ad-hoc read-only SQL across both catalogs (`scripts/sql.sh "..."`) |
-| `GET /healthz` | Liveness, used by the compose healthcheck |
+| `GET /` | A simple page listing the reports |
+| `GET /reports` | The same list as JSON |
+| `GET /reports/{name}` | Runs a report. Add `?format=csv` or `?format=html` for those formats; a browser gets HTML automatically. |
+| `GET /sources` | Checks each database on its own |
+| `POST /sql` | Runs your own read-only SQL across both databases (or use `scripts/sql.sh "..."`) |
+| `GET /healthz` | Says whether the service is up; Docker uses it |
 
-**Reports:** `at-risk-orders` (the main question) and `stock-coverage` (can stock cover paid
-orders?). To add a report, drop a `.sql` file into `federation/queries/` and rebuild. The leading
-`--` comment becomes its description.
+There are two reports. `at-risk-orders` answers the main question. `stock-coverage` checks whether the stock can cover the orders that are already paid. To add a report, put a `.sql` file in `federation/queries/` and rebuild. The comment at the top of the file becomes its description.
 
-**Errors:** `503` names the source that is down (`failed_source`) and gives the status of each source.
-`504` means a source hung longer than `QUERY_TIMEOUT`. `400` means the SQL itself is wrong.
-Passwords are removed from error messages.
+What the error codes mean:
+- `503`: a database is down. The response names it in `failed_source`.
+- `504`: a database took longer than the timeout to answer.
+- `400`: the query itself is wrong.
 
-## Configuration (environment of `federation`)
+Passwords are removed from all error messages.
+
+## Settings
+
+You set these on the `federation` service, for example `FEDERATION_MODE=persistent docker compose up -d federation`.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `FEDERATION_MODE` | `fresh` | `fresh`: new DuckDB and new ATTACH per request (nothing kept between requests). `persistent`: attach once and reuse. |
-| `QUERY_TIMEOUT` | `10s` | Upper bound per request, even if a source hangs |
-| `ORDERS_DSN` / `STOCK_DSN` | see compose | libpq-style connection strings, using the read-only `analytics_ro` users |
+| `FEDERATION_MODE` | `fresh` | `fresh` connects to both databases again on every request. `persistent` connects once and keeps the connection. |
+| `QUERY_TIMEOUT` | `10s` | The longest a request can take, even if a database hangs |
+| `ORDERS_DSN`, `STOCK_DSN` | see `docker-compose.yml` | Connection details for the two databases, using the read-only `analytics_ro` logins |
 
-Set them from the shell: `FEDERATION_MODE=persistent docker compose up -d federation`.
+If you want to look at the databases directly:
+- PostgreSQL is on `localhost:15432`. Log in as `webshop` with password `webshop`; the database is `kilatmart`.
+- MySQL is on `localhost:13306`. Log in as `inventory` with password `inventory`; the database is `kilatmart`.
 
-For manual access: PostgreSQL is on `localhost:15432` (`webshop`/`webshop`, db `kilatmart`) and
-MySQL on `localhost:13306` (`inventory`/`inventory`, db `kilatmart`).
+## How this relates to the lecture
 
-## Design decisions
+**Integration style.** This is query federation, also known as data virtualization. Instead of copying the data somewhere central, you query it where it already lives.
 
-**Assumed requirements.** We read these from the brief:
+**The coupling we removed.** There are no more nightly CSV exports and no copies that slowly go out of date. Analytics doesn't have to wait for an export to run.
 
-1. Data stays where it is: no copy, no export, no ETL schedule.
-2. Answers are fresh: a change in a source is visible on the next query.
-3. One query spans two *different* database systems (PostgreSQL and MySQL), each with its own naming (`sku` vs `product_code`).
-4. Analysts write plain SQL.
-5. Read-only: analytics must never write to operational databases.
-6. Runs on one laptop with `docker compose up`, built within one week.
+**The coupling we added.**
+- Every report now needs both databases to be up at that moment.
+- Analytics queries add load to the same databases that run the shop.
+- The report queries depend on each database's column names, so a rename breaks them (see the schema-change experiment).
 
-**Why DuckDB rather than Trino.** Both meet requirements 1–5. DuckDB is a library (in-process,
-about 100 MB of RAM), while Trino is a distributed server (a coordinator plus workers, about 4 GB of RAM).
-KilatMart has one analytics team, one main question and small data, so a server built for many users
-and big data adds cost without benefit. We would choose **Trino** if many analysts or BI tools needed
-to query at the same time, if sources multiplied, or if the data outgrew one machine.
+**The classical counterpart.** Data-virtualization products like Denodo do the same job. They join data from several systems without copying it, which is the work an ETL tool would otherwise do with a copy.
 
-**Why a Go service around DuckDB.** DuckDB is embedded, not a server, so something has to host it in
-a container and deliver results to the analytics team. The Go service does that. It turns
-the federated query into an HTTP service with clear error semantics, a timeout and read-only safety.
+**Limits.**
+- You only ever see the current state, with no history.
+- A slow database makes every report slow.
+- If one database is down, you get no answer at all.
+- Joining across databases sends data over the network on every query.
+- Differences in naming and types have to be handled in every query.
 
-**Defence in depth for "read-only".**
-- Both sources are attached `READ_ONLY`, and the database logins only have `SELECT` rights.
-- During development, DuckDB passed a `DELETE` through to MySQL despite the `READ_ONLY` attach, and
-  MySQL's grants rejected it. So the database user's rights are the real guard.
-- Ad-hoc SQL also cannot read local files (`disabled_filesystems`) or change settings (`lock_configuration`).
-
-## Link to the lecture
-
-- **Integration style:** query federation, also called data virtualization (EII). It is the "query instead of copy" side of the copy-versus-query trade-off.
-- **Coupling removed:** no nightly CSV exports and no duplicated copies to keep in sync. Analytics is no longer tied to an export schedule or a copy that is out of date.
-- **Coupling added:** *runtime and availability coupling*. Every report needs **both** source databases to be up, and analytical load lands on the operational databases. The analytics query is also tied to each source's schema (see experiment E3).
-- **Classical counterpart:** EII and data-virtualization products (e.g. Denodo). Their virtual views take over the "join data from several systems" job that an ETL tool would do with a copy.
-- **Limits:**
-  - No history: you only see the current state.
-  - The slowest source sets the response time.
-  - No result if a source is down.
-  - Cross-database joins move data over the network at query time.
-  - Type and naming differences must be handled in every query.
-
-## Repository layout
+## What's in the repo
 
 ```
-docker-compose.yml          the whole setup (pinned image versions)
-orders-db/init.sql          PostgreSQL schema + seed orders + read-only user
-stock-db/init.sql           MySQL schema + seed stock + read-only user
-federation/                 Go service: main.go, queries/*.sql, Dockerfile
-scripts/demo.sh             live demo, step by step
-scripts/reset.sh            reset to seed data
-scripts/sql.sh              ad-hoc SQL via the federation engine
-experiments/                failure experiments: runner + prediction table
+docker-compose.yml        starts everything
+orders-db/init.sql        orders table, sample orders, read-only login
+stock-db/init.sql         stock table, sample stock, read-only login
+federation/               the Go service: main.go, queries/*.sql, Dockerfile
+scripts/                  demo.sh, reset.sh, sql.sh
+experiments/              the failure experiments and how to run them
 ```
