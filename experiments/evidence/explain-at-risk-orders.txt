@@ -1,0 +1,35 @@
+# EXPLAIN of federation/queries/at-risk-orders.sql
+# Captured 2026-11-23 with: scripts/sql.sh "EXPLAIN <query>"
+# PostgreSQL scan receives the filter status = 'paid' (pushed down).
+# MySQL scan receives no filter: the whole stock table is read; qty_on_hand < reorder_level and the join run inside DuckDB.
+
+╭─ Order By ──────────────────────────────╮
+│ Order By: ordered_at ASC                │
+│ ~1 row                                  │
+╰────────────────────┬────────────────────╯
+╭─ Projection ───────┴────────────────────╮
+│ Projections: order_id, customer_name,   │
+│              sku, product_name,         │
+│              ordered_qty, qty_on_hand,  │
+│              reorder_level, warehouse,  │
+│              ordered_at                 │
+│ ~1 row                                  │
+╰────────────────────┬────────────────────╯
+╭─ Hash Join ────────┴────────────────────╮
+│ Join Type: INNER                        │
+│ Conditions: product_code = sku          │
+│ ~1 row                                  │
+╰────────────────────┬────────────────────╯
+                     ├──────────────────────────────────────╮
+╭─ Filter ───────────┴────────────────────╮  ╭─ Postgres Scan ─────────────╮
+│ Expression: qty_on_hand < reorder_level │  │ Table: orders               │
+│ ~1 row                                  │  │ Projections: sku, status,   │
+╰────────────────────┬────────────────────╯  │              order_id,      │
+╭─ Mysql Scan ───────┴────────────────────╮  │              customer_name, │
+│ Table: stock                            │  │              quantity,      │
+│ Projections: product_code, qty_on_hand, │  │              ordered_at     │
+│              reorder_level,             │  │ Filters: status = 'paid'    │
+│              product_name, warehouse    │  │ ~0 rows                     │
+│ ~1 row                                  │  ╰─────────────────────────────╯
+╰─────────────────────────────────────────╯
+
