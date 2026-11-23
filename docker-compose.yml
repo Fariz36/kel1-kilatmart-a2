@@ -1,0 +1,62 @@
+# KilatMart · IF4052 option A2 · Query federation with DuckDB
+# One command:  docker compose up --build
+name: kilatmart-a2
+
+services:
+  # Web shop's database (PostgreSQL) — owns the orders table.
+  orders-db:
+    image: postgres:16.16-alpine
+    environment:
+      POSTGRES_DB: kilatmart
+      POSTGRES_USER: webshop
+      POSTGRES_PASSWORD: webshop
+    volumes:
+      - ./orders-db/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    ports:
+      - "127.0.0.1:15432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U webshop -d kilatmart"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  # Inventory service's database (MySQL) — owns the stock table.
+  stock-db:
+    image: mysql:8.4.13
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: kilatmart
+      MYSQL_USER: inventory
+      MYSQL_PASSWORD: inventory
+    volumes:
+      - ./stock-db/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    ports:
+      - "127.0.0.1:13306:3306"
+    healthcheck:
+      # TCP is only opened after the init script has run, so this also waits for the seed data.
+      test: ["CMD-SHELL", "mysql -h127.0.0.1 -uanalytics_ro -panalytics_ro -e 'SELECT 1 FROM kilatmart.stock LIMIT 1'"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+
+  # The A2 box: DuckDB federation engine + HTTP API for the analytics team.
+  federation:
+    build: ./federation
+    image: kilatmart-a2/federation:1.0
+    environment:
+      FEDERATION_MODE: ${FEDERATION_MODE:-fresh}   # fresh | persistent (see experiments/)
+      QUERY_TIMEOUT: ${QUERY_TIMEOUT:-10s}
+      ORDERS_DSN: "host=orders-db port=5432 dbname=kilatmart user=analytics_ro password=analytics_ro connect_timeout=3"
+      STOCK_DSN: "host=stock-db port=3306 database=kilatmart user=analytics_ro password=analytics_ro"
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      orders-db:
+        condition: service_healthy
+      stock-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/app/federation", "-healthcheck"]
+      interval: 5s
+      timeout: 3s
+      retries: 5

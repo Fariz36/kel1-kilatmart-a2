@@ -1,0 +1,8 @@
+# local-only material
+*.pptx
+*:Zone.Identifier
+# build output
+federation/federation
+# experiment logs are evidence: commit the ones you use in the slides with `git add -f`
+experiments/results/*.log
+.env
