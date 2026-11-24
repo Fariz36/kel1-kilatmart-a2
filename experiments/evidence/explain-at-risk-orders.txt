@@ -1,7 +1,9 @@
 # EXPLAIN of federation/queries/at-risk-orders.sql
 # Captured 2026-11-23 with: scripts/sql.sh "EXPLAIN <query>"
 # PostgreSQL scan receives the filter status = 'paid' (pushed down).
-# MySQL scan receives no filter: the whole stock table is read; qty_on_hand < reorder_level and the join run inside DuckDB.
+# MySQL scan shows no filter in this static plan. At run time DuckDB does push a join-derived
+# filter (product_code IN <codes of paid orders>) to MySQL: see mysql-received-query.txt.
+# qty_on_hand < reorder_level and the join itself run inside DuckDB.
 
 ╭─ Order By ──────────────────────────────╮
 │ Order By: ordered_at ASC                │

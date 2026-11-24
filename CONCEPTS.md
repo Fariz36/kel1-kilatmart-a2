@@ -91,7 +91,7 @@ We evaluate the design against the SOA design principles covered in the course [
 
 **Availability dependency.**
 - The course does not list this as a principle, but it follows directly from the design. Each query needs every source to be reachable at query time.
-- In experiment E1, stopping the stock database made the service return no result at all (HTTP 503), rather than a partial one.
+- In experiment E1, stopping the stock database made the service return no result at all in every run (HTTP 503, or 504 when the failure exceeded the timeout), never a partial one.
 
 ### 5.3 Assessment
 
@@ -103,10 +103,10 @@ The issues the course lists for EII [W09, p. 12] were each observed in this proj
 
 | Stated issue | Observation in this project |
 |---|---|
-| Latency when multiple sources are involved | Attaching both sources on every request costs about 400–800 ms per query. An unreachable source delays failure: about 8 s for a stopped container (DNS resolution), about 3 s for a frozen one (connection timeout). |
+| Latency when multiple sources are involved | Attaching both sources on every request costs about 0.4–1.1 s per query. An unreachable source delays failure: 8–15 s for a stopped container, where host-name resolution competes with the 10 s query timeout, so the client receives either a 503 or a 504 (E1). A frozen container fails after about 3 s, from the connection timeout (E2). |
 | Metadata management | Schema changes in a source are not visible to the federation layer until a query fails (E3). |
-| Small return sets | The query plan ([`experiments/evidence/explain-at-risk-orders.txt`](experiments/evidence/explain-at-risk-orders.txt)) shows that the predicate `status = 'paid'` is pushed down to PostgreSQL. No predicate is pushed down to MySQL, so the entire stock table is transferred and filtered inside DuckDB. The cost grows with table size. |
-| Caching for optimization | A persistent mode, which reuses connections without caching any data, reduces query time to about 30 ms. Caching results was deliberately not implemented, because it would reintroduce stale data. |
+| Small return sets | The predicate `status = 'paid'` is pushed down to PostgreSQL ([`explain-at-risk-orders.txt`](experiments/evidence/explain-at-risk-orders.txt)). The static plan shows no filter on MySQL. At run time, however, DuckDB sends the product codes of the paid orders to MySQL as an `IN` list ([`mysql-received-query.txt`](experiments/evidence/mysql-received-query.txt)). The column comparison `qty_on_hand < reorder_level` and the join are still evaluated inside DuckDB. The amount of data moved therefore grows with the number of paid orders and the products they reference. |
+| Caching for optimization | A persistent mode, which reuses connections without caching any data, reduces query time to about 20–40 ms. Caching results was deliberately not implemented, because it would reintroduce stale data. |
 
 In addition, the course notes that semantic conflicts are the hardest problems in data integration [W09, p. 7]. Two such conflicts occur even in this small setting:
 - different names for the product identifier (`sku` versus `product_code`);

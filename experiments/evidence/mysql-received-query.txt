@@ -1,0 +1,15 @@
+# What MySQL actually receives for GET /reports/at-risk-orders (fresh mode)
+# Captured 2026-11-24 from MySQL's general query log (mysql.general_log), user analytics_ro.
+#
+# The static plan (explain-at-risk-orders.txt) shows no filter on the MySQL scan.
+# At run time, however, DuckDB derives a filter from the join: it reads the paid orders
+# from PostgreSQL first and sends their product codes to MySQL as an IN list.
+# The column comparison qty_on_hand < reorder_level is still evaluated inside DuckDB.
+
+Prepare  SELECT `product_code`, `qty_on_hand`, `reorder_level`, `product_name`, `warehouse` FROM `kilatmart`.`stock` WHERE `product_code` IN ('KM-003', 'KM-002', 'KM-004')
+Execute  SELECT `product_code`, `qty_on_hand`, `reorder_level`, `product_name`, `warehouse` FROM `kilatmart`.`stock` WHERE `product_code` IN ('KM-003', 'KM-002', 'KM-004')
+
+# Reproduce:
+#   docker compose exec stock-db mysql -uroot -proot -e "SET GLOBAL log_output='TABLE'; SET GLOBAL general_log='ON'; TRUNCATE mysql.general_log;"
+#   curl -s localhost:8080/reports/at-risk-orders > /dev/null
+#   docker compose exec stock-db mysql -uroot -proot -e "SET GLOBAL general_log='OFF'; SELECT command_type, CONVERT(argument USING utf8) FROM mysql.general_log WHERE user_host LIKE 'analytics_ro%';"
