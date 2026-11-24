@@ -1,0 +1,34 @@
+# experiment: source-down   mode: fresh   at: 2026-11-24T14:38:39+07:00
+## baseline
+$ GET /reports/at-risk-orders
+order_id,customer_name,sku,product_name,ordered_qty,qty_on_hand,reorder_level,warehouse,ordered_at
+2,Siti Rahmawati,KM-002,Sambal Bawang Jar 200 g,3,3,10,Cikarang,2026-11-21T03:02:00Z
+4,Dewi Lestari,KM-002,Sambal Bawang Jar 200 g,1,3,10,Cikarang,2026-11-22T01:30:00Z
+5,Rizky Hidayat,KM-004,Keripik Singkong Balado,4,6,8,Surabaya,2026-11-22T09:55:00Z
+
+HTTP 200 after 0.667780s
+## stop stock-db
+ Container kilatmart-a2-stock-db-1 Stopping 
+ Container kilatmart-a2-stock-db-1 Stopped 
+$ GET /reports/at-risk-orders
+{
+  "error": "federated query failed",
+  "detail": "query timed out after 10s: context deadline exceeded",
+  "sources": {
+    "orders (PostgreSQL)": "up",
+    "stock (MySQL)": "down: source stock (MySQL) unavailable: IO Error: Failed to connect to MySQL database with parameters \"host=stock-db port=3306 database=kilatmart user=analytics_ro password=***\": Unknown server host 'stock-db' (-2). Attempted host: stock-db"
+  },
+  "elapsed_ms": 10002
+}
+
+HTTP 504 after 14.413976s
+## start stock-db
+ Container kilatmart-a2-stock-db-1 Starting 
+ Container kilatmart-a2-stock-db-1 Started 
+$ GET /reports/at-risk-orders
+order_id,customer_name,sku,product_name,ordered_qty,qty_on_hand,reorder_level,warehouse,ordered_at
+2,Siti Rahmawati,KM-002,Sambal Bawang Jar 200 g,3,3,10,Cikarang,2026-11-21T03:02:00Z
+4,Dewi Lestari,KM-002,Sambal Bawang Jar 200 g,1,3,10,Cikarang,2026-11-22T01:30:00Z
+5,Rizky Hidayat,KM-004,Keripik Singkong Balado,4,6,8,Surabaya,2026-11-22T09:55:00Z
+
+HTTP 200 after 0.609001s
